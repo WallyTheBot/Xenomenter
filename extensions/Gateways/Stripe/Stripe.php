@@ -13,23 +13,26 @@ use App\Models\Extension;
 use App\Models\Invoice;
 use App\Models\InvoiceTransaction;
 use App\Models\Service;
+use App\Models\User;
 use Carbon\Carbon;
 use Exception;
 use Filament\Notifications\Notification;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\View;
 use Str;
 
 #[ExtensionMeta(
     name: 'Stripe Gateway',
     description: 'Accept payments via Stripe.',
-    version: '1.0.0',
+    version: '1.0.1',
     author: 'Paymenter',
     url: 'https://paymenter.org/docs/extensions/stripe',
-    icon: 'data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgNTEyIDUxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxyZWN0IHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIiBmaWxsPSIjNTMzQUZEIiAvPgogICAgPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xMjggMzg0TDM4NCAzMjkuNzFWMTI4TDEyOCAxODIuOTI0VjM4NFoiIGZpbGw9IndoaXRlIiAvPgo8L3N2Zz4K'
+    icon: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iIzUzM0FGRCIvPjxwYXRoIGQ9Ik0xMjAgMzkyTDM5MiAzMzRWMTEyTDEyMCAxNz hWMzk yWiIgZmlsbD0iI2ZmZiIvPjwvc3ZnPg=='
 )]
 class Stripe extends Gateway
 {
@@ -84,6 +87,7 @@ class Stripe extends Gateway
                 'label' => 'Stripe Restricted key',
                 'placeholder' => 'Enter your Stripe Restricted API key',
                 'type' => 'text',
+                'encrypted' => true,
                 'description' => 'Find your API keys at https://dashboard.stripe.com/apikeys',
                 'required' => true,
             ],
@@ -96,19 +100,19 @@ class Stripe extends Gateway
                 'required' => true,
             ],
             [
-                'name' => 'stripe_webhook_secret',
-                'label' => 'Stripe webhook secret (auto generated)',
-                'type' => 'text',
-                'description' => 'Stripe webhook secret',
+                'name' => 'stripe_create_customers',
+                'label' => 'Create detailed Stripe customers',
+                'type' => 'checkbox',
+                'description' => 'Controls the level of detail for Stripe customers. When enabled, customers include full address, phone, and company details. When disabled, customers include only basic information (name, email, user ID). Applies to both one-time payments and billing agreements.',
                 'required' => false,
             ],
             [
-                'name' => 'stripe_use_subscriptions',
-                'label' => 'Use subscriptions (Not used anymore)',
-                'type' => 'checkbox',
-                'description' => 'Enable this option if you want to use subscriptions with Stripe (if available)',
+                'name' => 'stripe_webhook_secret',
+                'label' => 'Stripe webhook secret (auto generated)',
+                'type' => 'text',
+                'encrypted' => true,
+                'description' => 'Stripe webhook secret',
                 'required' => false,
-                'database_type' => 'boolean',
             ],
         ];
     }
@@ -122,6 +126,11 @@ class Stripe extends Gateway
     {
         if (!empty($gateway->settings()->where('key', 'stripe_webhook_secret')->first()->value)) {
             return;
+        }
+
+        // If the extension isn't enabled, try to boot it
+        if (!Route::has('extensions.gateways.stripe.webhook')) {
+            require __DIR__ . '/routes.php';
         }
 
         // Check if webhook already exists
@@ -170,13 +179,25 @@ class Stripe extends Gateway
 
     public function pay($invoice, $total)
     {
-        $intent = $this->request('post', '/payment_intents', [
+        $intentData = [
             'description' => __('invoices.payment_for_invoice', ['number' => $invoice->number ?? $invoice->id]),
             'amount' => $total * 100,
             'currency' => $invoice->currency_code,
             'automatic_payment_methods' => ['enabled' => 'true'],
             'metadata' => ['invoice_id' => $invoice->id],
-        ]);
+        ];
+
+        try {
+            $includeDetails = (bool) $this->config('stripe_create_customers');
+            $customer = $this->createOrGetStripeCustomer($invoice->user, $includeDetails);
+            if (!empty($customer->id)) {
+                $intentData['customer'] = $customer->id;
+            }
+        } catch (Exception $e) {
+            // ignore customer creation errors and continue without customer
+        }
+
+        $intent = $this->request('post', '/payment_intents', $intentData);
 
         // Pay the invoice using Stripe
         return view('gateways.stripe::pay', ['invoice' => $invoice, 'total' => $total, 'intent' => $intent, 'stripePublishableKey' => $this->config('stripe_publishable_key')]);
@@ -517,38 +538,73 @@ class Stripe extends Gateway
         return true;
     }
 
-    public function createBillingAgreement($user)
+    /**
+     * Ensure a Stripe Customer exists for the given user. If a customer already
+     * exists it will be returned; otherwise a new customer will be created.
+     *
+     * @param  bool  $includeDetails  Whether to include address, phone, and company details
+     * @return object Stripe customer object
+     */
+    private function createOrGetStripeCustomer($user, $includeDetails = true)
     {
-        // Create a billing agreement for the given user.
-        // We create a SetupIntent and return the client secret to the frontend
-        $stripeCustomerId = $user->properties->where('key', 'stripe_id')->first();
-        // Create customer if not exists
-        if (!$stripeCustomerId) {
-            $customer = $this->request('post', '/customers', [
-                'email' => $user->email,
-                'name' => $user->name,
-                'metadata' => ['user_id' => $user->id],
-            ]);
-            $user->properties()->updateOrCreate(['key' => 'stripe_id'], ['value' => $customer->id]);
-        } else {
+        $stripeCustomerId = $user->properties()->where('key', 'stripe_id')->first();
+
+        if ($stripeCustomerId) {
             try {
                 $customer = $this->request('get', '/customers/' . $stripeCustomerId->value);
-                if (isset($customer->deleted)) {
-                    $customer = null;
+                if (!isset($customer->deleted)) {
+                    return $customer;
                 }
             } catch (Exception $e) {
-                // Customer not found, create a new one
-                $customer = null;
-            }
-            if (!$customer) {
-                $customer = $this->request('post', '/customers', [
-                    'email' => $user->email,
-                    'name' => $user->name,
-                    'metadata' => ['user_id' => $user->id],
-                ]);
-                $user->properties()->updateOrCreate(['key' => 'stripe_id'], ['value' => $customer->id]);
+                // continue and create a new customer
             }
         }
+
+        // Build basic payload
+        $payload = [
+            'email' => $user->email,
+            'name' => $user->name,
+            'metadata' => ['user_id' => $user->id],
+        ];
+
+        // Add detailed information if requested
+        if ($includeDetails) {
+            $props = $user->properties()->pluck('value', 'key')->toArray();
+
+            if (!empty($props['company_name'])) {
+                $payload['description'] = $props['company_name'];
+            }
+
+            $address = array_filter([
+                'line1' => $props['address'] ?? null,
+                'line2' => $props['address2'] ?? null,
+                'city' => $props['city'] ?? null,
+                'state' => $props['state'] ?? null,
+                'postal_code' => $props['zip'] ?? null,
+                'country' => $props['country'] ?? null,
+            ]);
+
+            if ($address) {
+                $payload['address'] = $address;
+            }
+
+            if (!empty($props['phone'])) {
+                $payload['phone'] = $props['phone'];
+            }
+        }
+
+        $customer = $this->request('post', '/customers', $payload);
+
+        $user->properties()->updateOrCreate(['key' => 'stripe_id'], ['value' => $customer->id]);
+
+        return $customer;
+    }
+
+    public function createBillingAgreement($user)
+    {
+        // Create or fetch a Stripe customer for this user, use detailed info based on setting
+        $includeDetails = (bool) $this->config('stripe_create_customers');
+        $customer = $this->createOrGetStripeCustomer($user, $includeDetails);
 
         $setupIntent = $this->request('post', '/setup_intents', [
             'metadata' => [
@@ -603,7 +659,7 @@ class Stripe extends Gateway
 
     private function setupBillingAgreement($setupIntent)
     {
-        $user = \App\Models\User::findOrFail($setupIntent->metadata->user_id);
+        $user = User::findOrFail($setupIntent->metadata->user_id);
 
         // Get setup intent with expanded data
         $setupIntent = $this->request('get', '/setup_intents/' . $setupIntent->id, [
@@ -713,7 +769,7 @@ class Stripe extends Gateway
                 'metadata' => ['invoice_id' => $invoice->id, 'billing_agreement_id' => $billingAgreement->id],
             ]);
         } catch (Exception $e) {
-            if ($e instanceof \Illuminate\Http\Client\RequestException && $e->response->status() === 400) {
+            if ($e instanceof RequestException && $e->response->status() === 400) {
                 $error = $e->response->object()->error;
                 // If error is invalid_request_error and message contains "The provided currency" we can show the message
                 if ($error->type === 'invalid_request_error' && Str::contains($error->message, 'The currency provided')) {
@@ -749,7 +805,7 @@ class Stripe extends Gateway
     {
         [$timestamp, $signature] = $this->getHeaderValues($sig_header);
 
-        if (empty($timestamp) || empty($signature)) {
+        if (empty($timestamp) || empty($signature) || empty($secret)) {
             return false;
         }
 

@@ -4,9 +4,12 @@ return [
     '' => '',
 
     'button' => [
-        'view' => 'View',
-        'view_all' => 'View All',
+        'view' => 'Visualizza',
+        'view_all' => 'Visualizza tutto',
     ],
-    'confirm' => 'Confirm',
-    'cancel' => 'Cancel',
+    'confirm' => 'Conferma',
+    'cancel' => 'Annulla',
+    'select' => [
+        'placeholder' => 'Seleziona :name',
+    ],
 ];

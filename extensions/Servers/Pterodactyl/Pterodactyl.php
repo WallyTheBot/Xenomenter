@@ -85,9 +85,12 @@ class Pterodactyl extends Server
 
         $eggList = [];
         if (isset($values['nest_id']) && $values['nest_id'] !== '') {
-            $eggs = $this->request('/api/application/nests/' . $values['nest_id'] . '/eggs');
-            foreach ($eggs['data'] as $egg) {
-                $eggList[$egg['attributes']['id']] = $egg['attributes']['name'];
+            try {
+                $eggs = $this->request('/api/application/nests/' . $values['nest_id'] . '/eggs');
+                foreach ($eggs['data'] as $egg) {
+                    $eggList[$egg['attributes']['id']] = $egg['attributes']['name'];
+                }
+            } catch (Exception $e) {
             }
         }
 
@@ -648,16 +651,5 @@ class Pterodactyl extends Server
                 'url' => $this->config('host') . '/server/' . $server['attributes']['identifier'],
             ],
         ];
-    }
-
-    public function migrateOption(string $key, ?string $value)
-    {
-        return match ($key) {
-            'egg' => ['key' => 'egg_id', 'value' => $value],
-            'nest' => ['key' => 'nest_id', 'value' => $value],
-            'allocation' => ['key' => 'additional_allocations', 'value' => $value],
-            'location' => ['key' => 'location_ids', 'value' => json_encode([$value]), 'type' => 'array'],
-            default => ['key' => $key, 'value' => $value]
-        };
     }
 }

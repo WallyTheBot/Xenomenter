@@ -21,6 +21,7 @@ return [
     'sessions' => 'Sessões',
     'sessions_description' => 'Gerencie e desconecte suas sessões ativas em outros navegadores e dispositivos.',
     'logout_sessions' => 'Desconectar esta sessão',
+    'current_device' => 'Current device',
 
     'input' => [
         'current_password' => 'Senha atual',
@@ -71,6 +72,7 @@ return [
     'remove' => 'Remover',
     'remove_payment_method' => 'Remover Método de Pagamento',
     'remove_payment_method_confirm' => 'Tem certeza que deseja remover :name? Esta ação não pode ser desfeita.',
+    'expires' => 'Expires :date',
     'cancel' => 'Cancelar',
     'confirm' => 'Sim, remover',
     'email_notifications' => 'Notificações via E-mail',

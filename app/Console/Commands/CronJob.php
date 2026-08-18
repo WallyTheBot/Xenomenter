@@ -7,12 +7,14 @@ use App\Helpers\NotificationHelper;
 use App\Jobs\Server\SuspendJob;
 use App\Jobs\Server\TerminateJob;
 use App\Models\CronStat;
+use App\Models\DebugLog;
+use App\Models\EmailLog;
 use App\Models\Invoice;
-use App\Models\Notification;
 use App\Models\Service;
 use App\Models\ServiceUpgrade;
 use App\Models\Setting;
 use App\Models\Ticket;
+use App\Services\Service\RenewServiceService;
 use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Config;
@@ -67,7 +69,7 @@ class CronJob extends Command
 
                     // If service price is 0, immediately activate next period
                     if ($service->price <= 0) {
-                        (new \App\Services\Service\RenewServiceService)->handle($service);
+                        (new RenewServiceService)->handle($service);
                         $number++;
 
                         return;
@@ -143,10 +145,16 @@ class CronJob extends Command
                 ServiceUpgrade::where('status', 'pending')->get()->each(function ($upgrade) use (&$number) {
                     if ($upgrade->service->expires_at < now()) {
                         $upgrade->update(['status' => 'cancelled']);
-                        $upgrade->invoice->update(['status' => 'cancelled']);
+                        // Somehow people manage to have an upgrade without an invoice
+                        if ($upgrade->invoice) {
+                            $upgrade->invoice->update(['status' => 'cancelled']);
+                        }
 
                         $number++;
 
+                        return;
+                    }
+                    if (!$upgrade->invoice) {
                         return;
                     }
 
@@ -205,9 +213,9 @@ class CronJob extends Command
             });
 
             $this->runCronJob('email_logs_deleted', function ($number = 0) {
-                $number = Notification::where('created_at', '<', now()->subDays((int) config('settings.cronjob_delete_email_logs', 90)))->count();
+                $number = EmailLog::where('created_at', '<', now()->subDays((int) config('settings.cronjob_delete_email_logs', 90)))->count();
                 // Delete email logs older then x
-                Notification::where('created_at', '<', now()->subDays((int) config('settings.cronjob_delete_email_logs', 90)))->delete();
+                EmailLog::where('created_at', '<', now()->subDays((int) config('settings.cronjob_delete_email_logs', 90)))->delete();
 
                 return $number;
             });
@@ -238,6 +246,9 @@ class CronJob extends Command
         ]);
 
         $this->info('Successfully charged ' . $this->successFullCharges . ' invoices.');
+
+        // Remove old debug logs
+        DebugLog::where('created_at', '<', now()->subDays(30))->delete();
 
         // Check for updates
         $this->info('Checking for updates...');

@@ -42,7 +42,7 @@ class Checkout extends Component
     public function mount($product)
     {
         $this->product = $this->category->products()->where('slug', $product)->firstOrFail();
-        if ($this->product->stock === 0) {
+        if ($this->product->stock === 0 || !$this->product->price()->available) {
             return $this->redirect(route('products.show', ['category' => $this->category, 'product' => $this->product]), true);
         }
 
@@ -145,12 +145,12 @@ class Checkout extends Component
 
     public function rules()
     {
+        $availablePlanIds = $this->product->availablePlans()->pluck('id')->toArray();
+
         $rules = [
             'plan_id' => [
                 'required',
-                Rule::exists('plans', 'id')->where(function ($query) {
-                    $query->where('priceable_id', $this->product->id)->where('priceable_type', get_class($this->product));
-                }),
+                Rule::in($availablePlanIds),
             ],
         ];
         foreach ($this->product->configOptions as $option) {
@@ -221,6 +221,20 @@ class Checkout extends Component
         // First we validate the plans
         $this->validate(attributes: $this->attributes());
 
+        // Has this product quantity = no?
+        if ($this->product->allow_quantity == 'disabled') {
+            // Check if the product is already in the cart
+            $item = Cart::get()->items()->where('product_id', $this->product->id)->when($this->cartProductKey, function ($query) {
+                $query->where('id', '!=', $this->cartProductKey);
+            })->get();
+
+            if ($item->isNotEmpty()) {
+                $this->notify('This product is already in your cart and cannot be added again.', 'error');
+
+                return;
+            }
+        }
+
         // Change configOptions so they also contain the name of the option (resulting in less database calls = faster speeds)
         $configOptions = $this->product->configOptions->map(function ($option) {
             if ($option->type == 'checkbox') {
@@ -254,7 +268,13 @@ class Checkout extends Component
             ];
         });
 
-        Cart::add($this->product, $this->plan, $configOptions, $this->checkoutConfig, key: $this->cartProductKey);
+        // Ensure checkout config has only the allowed keys and values
+        $checkoutConfig = [];
+        foreach ($this->getCheckoutConfig() as $config) {
+            $checkoutConfig[$config['name']] = $this->checkoutConfig[$config['name']] ?? null;
+        }
+
+        Cart::add($this->product, $this->plan, $configOptions, $checkoutConfig, key: $this->cartProductKey);
 
         $this->dispatch('cartUpdated');
 

@@ -6,9 +6,13 @@ use App\Classes\Cart;
 use App\Livewire\Component;
 use App\Models\Currency;
 
+/**
+ * @deprecated This component is deprecated, use LocaleSwitch instead
+ * @see LocaleSwitch
+ */
 class CurrencySwitch extends Component
 {
-    public $currentCurrency;
+    public string $currentCurrency;
 
     protected $currencies = [];
 
@@ -36,6 +40,11 @@ class CurrencySwitch extends Component
             return;
         }
         session(['currency' => $currency]);
+        $cart = Cart::get();
+        if ($cart->exists) {
+            $cart->currency_code = $currency;
+            $cart->save();
+        }
 
         return $this->redirect(request()->header('Referer', '/'), navigate: true);
     }

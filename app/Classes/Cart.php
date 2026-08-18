@@ -8,6 +8,8 @@ use App\Models\Plan;
 use App\Models\Product;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cookie;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Session;
 
 class Cart
@@ -53,10 +55,19 @@ class Cart
         return $cart;
     }
 
+    protected const DEFAULT_MAX_ITEMS = 15;
+
+    protected const DEFAULT_RATE_LIMIT_MAX_ATTEMPTS = 10;
+
+    protected const DEFAULT_RATE_LIMIT_DECAY_MINUTES = 1;
+
     public static function add(Product $product, Plan $plan, $configOptions, $checkoutConfig, $quantity = 1, $key = null)
     {
+        self::checkRateLimit();
+
         // Match on key
         $cart = self::createCart();
+        self::ensureCartItemLimit($cart, $key);
 
         $item = $cart->items()->updateOrCreate([
             'id' => $key,
@@ -87,6 +98,37 @@ class Cart
 
         // Return index of the newly added item
         return $item->id;
+    }
+
+    protected static function ensureCartItemLimit($cart, $key = null)
+    {
+        $existingItem = $key ? $cart->items()->where('id', $key)->exists() : false;
+
+        if (!$existingItem && $cart->items()->count() >= self::DEFAULT_MAX_ITEMS) {
+            throw new DisplayException('Your cart cannot contain more than ' . self::DEFAULT_MAX_ITEMS . ' items.');
+        }
+    }
+
+    protected static function checkRateLimit()
+    {
+        $key = self::resolveRateLimiterKey();
+        $maxAttempts = self::DEFAULT_RATE_LIMIT_MAX_ATTEMPTS;
+        $decayMinutes = self::DEFAULT_RATE_LIMIT_DECAY_MINUTES;
+
+        if (RateLimiter::tooManyAttempts($key, $maxAttempts)) {
+            throw new DisplayException('You are adding items too quickly. Please wait a moment and try again.');
+        }
+
+        RateLimiter::hit($key, $decayMinutes * 60);
+    }
+
+    protected static function resolveRateLimiterKey()
+    {
+        if (Auth::check()) {
+            return sprintf('cart-add:user:%s', Auth::id());
+        }
+
+        return sprintf('cart-add:ip:%s', request()->ip());
     }
 
     public static function remove($index)
@@ -131,30 +173,51 @@ class Cart
      */
     public static function validateCoupon($coupon_code)
     {
-        $coupon = Coupon::where('code', $coupon_code)->first();
+        return DB::transaction(function () use ($coupon_code) {
+            $coupon = Coupon::where('code', $coupon_code)->lockForUpdate()->first();
 
-        if (!$coupon) {
-            throw new DisplayException('Coupon code not found');
-        }
+            if (!$coupon) {
+                throw new DisplayException('Coupon code not found');
+            }
 
-        if ($coupon->expires_at && $coupon->expires_at->isPast()) {
-            throw new DisplayException('Coupon code has expired');
-        }
-        if ($coupon->starts_at && $coupon->starts_at->isFuture()) {
-            throw new DisplayException('Coupon code is not active yet');
-        }
-        if ($coupon->max_uses && $coupon->services->count() >= $coupon->max_uses) {
-            throw new DisplayException('Coupon code has reached its maximum uses');
-        }
-        if (Auth::check() && $coupon->hasExceededMaxUsesPerUser(Auth::id())) {
-            throw new DisplayException('You have already used this coupon the maximum number of times allowed');
-        }
+            if ($coupon->expires_at && $coupon->expires_at->isPast()) {
+                throw new DisplayException('Coupon code has expired');
+            }
+            if ($coupon->starts_at && $coupon->starts_at->isFuture()) {
+                throw new DisplayException('Coupon code is not active yet');
+            }
+            if ($coupon->max_uses && $coupon->services()->count() >= $coupon->max_uses) {
+                throw new DisplayException('Coupon code has reached its maximum uses');
+            }
+            if (Auth::check() && $coupon->hasExceededMaxUsesPerUser(Auth::id())) {
+                throw new DisplayException('You have already used this coupon the maximum number of times allowed');
+            }
+            if ($coupon->products->isNotEmpty()) {
+                $cart = self::get();
+                $applicable = false;
+                foreach ($cart->items as $item) {
+                    if ($coupon->products->contains($item->product_id)) {
+                        $applicable = true;
+                        break;
+                    }
+                }
+                if (!$applicable) {
+                    throw new DisplayException('Coupon code is not valid for any items in your cart');
+                }
+            }
 
-        return $coupon;
+            return $coupon;
+        });
     }
 
     public static function applyCoupon($code)
     {
+        if (RateLimiter::tooManyAttempts('apply_coupon_' . request()->ip(), 5)) {
+            throw new DisplayException('Too many attempts. Please try again later.');
+        }
+
+        RateLimiter::hit('apply_coupon_' . request()->ip());
+
         $coupon = self::validateCoupon($code);
 
         $wasSuccessful = false;
@@ -171,6 +234,8 @@ class Cart
 
         if ($wasSuccessful) {
             $cart->save();
+
+            return $cart;
         } else {
             $cart->coupon_id = null;
             $cart->save();

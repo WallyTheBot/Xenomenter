@@ -4,9 +4,12 @@ return [
     '' => '',
 
     'button' => [
-        'view' => 'View',
-        'view_all' => 'View All',
+        'view' => 'Переглянути',
+        'view_all' => 'Переглянути все',
     ],
-    'confirm' => 'Confirm',
-    'cancel' => 'Cancel',
+    'confirm' => 'Підтвердити',
+    'cancel' => 'Скасувати',
+    'select' => [
+        'placeholder' => 'Будь ласка, вкажіть :name',
+    ],
 ];

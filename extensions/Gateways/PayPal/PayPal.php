@@ -7,9 +7,11 @@ use App\Classes\Extension\Gateway;
 use App\Events\Service\Updated;
 use App\Events\ServiceCancellation\Created;
 use App\Helpers\ExtensionHelper;
+use App\Models\BillingAgreement;
 use App\Models\Invoice;
 use App\Models\InvoiceItem;
 use App\Models\Service;
+use App\Models\User;
 use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -33,7 +35,7 @@ class PayPal extends Gateway
         return $this->config('paypal_support_billing_agreements') ?? false;
     }
 
-    public function createBillingAgreement(\App\Models\User $user)
+    public function createBillingAgreement(User $user)
     {
         // Using PayPal Vaulting
         $url = $this->config('test_mode') ? 'https://api-m.sandbox.paypal.com' : 'https://api-m.paypal.com';
@@ -61,7 +63,7 @@ class PayPal extends Gateway
         return $result->links[1]->href;
     }
 
-    public function cancelBillingAgreement(\App\Models\BillingAgreement $billingAgreement): bool
+    public function cancelBillingAgreement(BillingAgreement $billingAgreement): bool
     {
         $url = $this->config('test_mode') ? 'https://api-m.sandbox.paypal.com' : 'https://api-m.paypal.com';
         $this->request('delete', $url . '/v3/vault/payment-tokens/' . $billingAgreement->external_reference);
@@ -100,7 +102,7 @@ class PayPal extends Gateway
         ]);
     }
 
-    public function charge(Invoice $invoice, $total, \App\Models\BillingAgreement $billingAgreement)
+    public function charge(Invoice $invoice, $total, BillingAgreement $billingAgreement)
     {
         $url = $this->config('test_mode') ? 'https://api-m.sandbox.paypal.com' : 'https://api-m.paypal.com';
         $result = $this->request('post', $url . '/v2/checkout/orders', [
@@ -175,6 +177,7 @@ class PayPal extends Gateway
                 'name' => 'client_secret',
                 'label' => 'Client Secret',
                 'type' => 'text',
+                'encrypted' => true,
                 'description' => 'Find your API keys at https://developer.paypal.com/developer/applications',
                 'required' => true,
             ],
@@ -282,19 +285,18 @@ class PayPal extends Gateway
     public function webhook(Request $request)
     {
         $body = $request->getContent();
-        $sigString = $request->header('PAYPAL-TRANSMISSION-ID') . '|' . $request->header('PAYPAL-TRANSMISSION-TIME') . '|' . $this->config('webhook_id') . '|' . crc32($body);
-        $pubKey = openssl_pkey_get_public(file_get_contents($request->header('PAYPAL-CERT-URL')));
-        $details = openssl_pkey_get_details($pubKey);
-        $verifyResult = openssl_verify(
-            $sigString,
-            base64_decode(
-                $request->header('PAYPAL-TRANSMISSION-SIG')
-            ),
-            $details['key'],
-            'sha256WithRSAEncryption'
-        );
-        if ($verifyResult !== 1) {
-            return response()->json(['status' => 'error']);
+        $verification = $this->request('post', ($this->config('test_mode') ? 'https://api-m.sandbox.paypal.com' : 'https://api-m.paypal.com') . '/v1/notifications/verify-webhook-signature', [
+            'auth_algo' => $request->header('PAYPAL-AUTH-ALGO'),
+            'cert_url' => $request->header('PAYPAL-CERT-URL'),
+            'transmission_id' => $request->header('PAYPAL-TRANSMISSION-ID'),
+            'transmission_sig' => $request->header('PAYPAL-TRANSMISSION-SIG'),
+            'transmission_time' => $request->header('PAYPAL-TRANSMISSION-TIME'),
+            'webhook_id' => $this->config('webhook_id'),
+            'webhook_event' => json_decode($body, true),
+        ]);
+
+        if (($verification->verification_status ?? null) !== 'SUCCESS') {
+            return response()->json(['status' => 'error'], 400);
         }
 
         $body = $request->json()->all();
@@ -321,7 +323,7 @@ class PayPal extends Gateway
             });
         } elseif ($body['event_type'] === 'VAULT.PAYMENT-TOKEN.DELETED') {
             // Find the billing agreement with this external reference
-            $billingAgreement = \App\Models\BillingAgreement::where('external_reference', $body['resource']['id'])->first();
+            $billingAgreement = BillingAgreement::where('external_reference', $body['resource']['id'])->first();
             if ($billingAgreement) {
                 $billingAgreement->delete();
             }

@@ -22,7 +22,7 @@ return [
     'or_sign_in_with' => 'Або увійдіть через',
     'forgot_password' => 'Забули пароль?',
     'dont_have_account' => 'Немає облікового запису?',
-    'already_have_account' => 'Already have an account?',
+    'already_have_account' => 'Вже маєте обліковий запис?',
 
     'sign_up' => 'Реєстрація',
     'sign_up_title' => 'Створіть свій обліковий запис',
@@ -30,17 +30,17 @@ return [
     'logout' => 'Вийти',
 
     'input' => [
-        'email' => 'Email',
+        'email' => 'Електронна пошта',
         'email_label' => 'Адреса електронної пошти',
         'password' => 'Пароль',
     ],
 
     'oauth' => [
-        'unverified_discord_account' => 'Ваш Discord-акаунт не підтверджено.',
+        'unverified_discord_account' => 'Ваш обліковий запис Discord не підтверджено.',
         'account_not_registered' => 'Ви не зареєстровані на цьому сайті.',
     ],
 
-    'reset_password' => 'Reset password',
+    'reset_password' => 'Скинути пароль',
 
     'verify_2fa' => 'Підтвердити 2FA',
     'verify' => 'Підтвердити',

@@ -14,7 +14,7 @@ use OwenIt\Auditing\Contracts\Auditable;
 #[ObservedBy([ServiceObserver::class])]
 class Service extends Model implements Auditable
 {
-    use \App\Models\Traits\Auditable, HasFactory, HasProperties;
+    use HasFactory, HasProperties, Traits\Auditable;
 
     public const STATUS_PENDING = 'pending';
 
@@ -87,6 +87,20 @@ class Service extends Model implements Auditable
         );
     }
 
+    public function label(): Attribute
+    {
+        return Attribute::make(
+            get: fn ($value) => $value ?: $this->baseLabel
+        );
+    }
+
+    public function baseLabel(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->product->name . ' #' . $this->id
+        );
+    }
+
     /**
      * Get the description for the next invoice item.
      */
@@ -113,7 +127,12 @@ class Service extends Model implements Auditable
         if ($this->plan->type == 'one-time' || $this->plan->type == 'free') {
             return null;
         }
-        $date = $this->expires_at ?? now();
+        if (!$this->expires_at || $this->status != self::STATUS_ACTIVE) {
+            // Make sure that if a service is being renewed after suspension or pending, we use the current date as base
+            $date = now();
+        } else {
+            $date = $this->expires_at;
+        }
 
         return $date->{'add' . ucfirst($this->plan->billing_unit) . 's'}($this->plan->billing_period);
     }
@@ -202,7 +221,7 @@ class Service extends Model implements Auditable
     public function calculatePrice()
     {
         // Calculate the price based on the plan and config options
-        $price = $this->plan->price()->price;
+        $price = $this->plan->price($this->currency_code)->price;
 
         $this->configs->each(function ($config) use (&$price) {
             $configValue = $config->configValue;

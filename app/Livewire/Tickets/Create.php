@@ -34,20 +34,21 @@ class Create extends Component
         // Add rules for the department
         $this->validate([
             'department' => count((array) config('settings.ticket_departments')) > 0 ? 'required|in:' . implode(',', array_values((array) config('settings.ticket_departments'))) : '',
-            'service' => 'nullable|exists:services,id',
+            'service' => 'nullable|exists:services,id,user_id,' . Auth::id(),
             'subject' => 'required|string',
             'message' => 'required|string',
             'priority' => 'required|in:low,medium,high',
             'attachments.*' => 'file|max:10240',
         ]);
 
-        if (RateLimiter::tooManyAttempts('create-ticket', 1)) {
-            $this->notify('Too many ticket creation attempts. Please try again in 60 seconds.', 'error');
+        $rateLimitKey = 'create-ticket:' . Auth::id();
+        if (RateLimiter::tooManyAttempts($rateLimitKey, 1)) {
+            $this->notify('Too many ticket creation attempts. Please try again in 30 seconds.', 'error');
 
             return;
         }
 
-        RateLimiter::increment('create-ticket', 30);
+        RateLimiter::increment($rateLimitKey, 30);
 
         $ticket = Ticket::create([
             'user_id' => Auth::id(),

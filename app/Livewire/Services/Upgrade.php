@@ -2,17 +2,19 @@
 
 namespace App\Livewire\Services;
 
-use App\Classes\Price;
-use App\Events\Invoice\Created as InvoiceCreated;
+use App\Exceptions\DisplayException;
 use App\Livewire\Component;
 use App\Models\Invoice;
 use App\Models\Product;
 use App\Models\Service;
+use App\Models\ServiceConfig;
 use App\Models\ServiceUpgrade;
 use App\Models\User;
 use App\Services\ServiceUpgrade\ServiceUpgradeService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 
 class Upgrade extends Component
@@ -32,7 +34,7 @@ class Upgrade extends Component
         $this->authorize('view', $this->service);
 
         if (!$this->service->upgradable) {
-            $this->notify('This service is not upgradable.', 'error');
+            $this->notify('This service is not upgradable.', 'error', true);
 
             return $this->redirect(route('services.show', $this->service), true);
         }
@@ -40,7 +42,7 @@ class Upgrade extends Component
         $this->upgrade = $this->service->product->id;
         $this->totalToday();
 
-        // We only have upgrabble config options if the product has any
+        // We only have upgradable config options if the product has any
         if ($this->service->productUpgrades()->count() === 0) {
             $this->nextStep();
         }
@@ -54,31 +56,25 @@ class Upgrade extends Component
             'product' => $this->upgradeProduct,
         ]);
 
-        $total = $upgrade->calculateProratedAmount(
-            $this->service->product,
-            $this->upgradeProduct
-        )->price;
+        // Initialize empty configs collection
+        $configs = collect();
 
-        // Calculate prices for config options
+        // Add config options to the temporary upgrade (without saving)
         foreach ($this->configOptions as $optionId => $value) {
             $option = $this->upgradeProduct->upgradableConfigOptions->where('id', $optionId)->first();
             if (!$option || !$option->children->contains('id', $value)) {
                 continue;
             }
 
-            $oldPrice = $this->service->configs->where('config_option_id', $optionId)->first();
-
-            $ctotal = $upgrade->calculateProratedAmount(
-                $oldPrice ? $oldPrice->configValue : null,
-                $option->children->find($value)
-            );
-            $total += $ctotal->price;
+            $configs->push(new ServiceConfig([
+                'config_option_id' => $optionId,
+                'config_value_id' => $value,
+            ]));
         }
 
-        return new Price([
-            'price' => $total,
-            'currency' => $this->service->currency,
-        ]);
+        $upgrade->setRelation('configs', $configs);
+
+        return $upgrade->calculatePrice();
     }
 
     // When upgrade changes, update the upgradeProduct
@@ -129,7 +125,10 @@ class Upgrade extends Component
                 $rules["configOptions.{$option->id}"] = ['required'];
             } elseif ($option->type === 'checkbox') {
             } else {
-                $rules["configOptions.{$option->id}"] = ['required', 'exists:config_options,id'];
+                $rules["configOptions.{$option->id}"] = [
+                    'required',
+                    Rule::in($option->children->pluck('id')->toArray()),
+                ];
             }
         }
 
@@ -146,95 +145,127 @@ class Upgrade extends Component
 
         $this->validate();
 
-        $upgradePlan = $this->upgradeProduct->availablePlans()->where('billing_period', $this->service->plan->billing_period)->where('billing_unit', $this->service->plan->billing_unit)->first();
+        DB::beginTransaction();
+        try {
+            $service = Service::where('id', $this->service->id)->lockForUpdate()->first();
 
-        // The old config options must be in upgradableConfigOptions
-        $serviceConfigOptions = $this->service->configs->pluck('config_value_id', 'config_option_id')->toArray();
-        $configOptions = collect($serviceConfigOptions)->filter(function ($value, $key) use ($serviceConfigOptions) {
-            return isset($serviceConfigOptions[$key]) && $this->upgradeProduct->upgradableConfigOptions->contains('id', $key);
-        })->toArray();
-
-        // If the product did not change and the config options are the same, present the user with a message
-        if ($this->upgradeProduct->id === $this->service->product_id && $this->configOptions == $configOptions) {
-            $this->notify('You have not changed anything. Please select a different product or change the configuration options.', 'error');
-
-            return;
-        }
-
-        $upgrade = new ServiceUpgrade([
-            'service_id' => $this->service->id,
-            'product_id' => $this->upgradeProduct->id,
-            'plan_id' => $upgradePlan->id,
-        ]);
-        $upgrade->save();
-
-        if ($this->configOptions) {
-            foreach ($this->configOptions as $optionId => $value) {
-                $upgrade->configs()->create([
-                    'config_option_id' => $optionId,
-                    'config_value_id' => $value,
-                ]);
-            }
-        }
-        $price = $upgrade->calculatePrice();
-
-        if ($price->price <= 0) {
-            (new ServiceUpgradeService)->handle($upgrade);
-
-            if (!config('settings.credits_on_downgrade', true)) {
-                $this->notify('The upgrade has been completed.', 'success', true);
+            // Validate upgradable again after locking the service
+            if ($service->upgrade()->where('status', ServiceUpgrade::STATUS_PENDING)->count() != 0) {
+                DB::rollBack();
+                $this->notify('This service is not upgradable.', 'error', true);
 
                 return $this->redirect(route('services.show', $this->service), true);
             }
 
-            // Check if user has credits in this currency
-            /** @var User */
-            $user = Auth::user();
-            $credit = $user->credits()->where('currency_code', $price->currency->code)->first();
+            $upgradePlan = $this->upgradeProduct->availablePlans()
+                ->where('billing_period', $service->plan->billing_period)
+                ->where('billing_unit', $service->plan->billing_unit)
+                ->first();
 
-            if ($credit) {
-                // Increment the credits, `abs()` ensures the amount to add is positive
-                $credit->increment('amount', abs($price->price));
-            } else {
-                $user->credits()->create([
-                    'currency_code' => $price->currency->code,
-                    'amount' => abs($price->price),
-                ]);
+            // The old config options must be in upgradableConfigOptions
+            $serviceConfigOptions = $service->configs->pluck('config_value_id', 'config_option_id')->toArray();
+            $configOptions = collect($serviceConfigOptions)->filter(function ($value, $key) use ($serviceConfigOptions) {
+                return isset($serviceConfigOptions[$key]) && $this->upgradeProduct->upgradableConfigOptions->contains('id', $key);
+            })->toArray();
+
+            // If the product did not change and the config options are the same, present the user with a message
+            if ($this->upgradeProduct->id === $service->product_id && $this->configOptions == $configOptions) {
+                // No changes made, clean rollback and exit safely
+                DB::rollBack();
+                $this->notify('You have not changed anything. Please select a different product or change the configuration options.', 'error');
+
+                return;
             }
 
-            if ($price->price < 0) {
-                $this->notify('The upgrade has been completed. We\'ve added the remaining amount to your account balance.', 'success', true);
-            } else {
-                $this->notify('The upgrade has been completed.', 'success', true);
+            $upgrade = new ServiceUpgrade([
+                'service_id' => $service->id,
+                'product_id' => $this->upgradeProduct->id,
+                'plan_id' => $upgradePlan->id,
+            ]);
+            $upgrade->save();
+
+            if ($this->configOptions) {
+                foreach ($this->upgradeProduct->upgradableConfigOptions as $option) {
+                    if (!isset($this->configOptions[$option->id])) {
+                        continue;
+                    }
+                    $upgrade->configs()->create([
+                        'config_option_id' => $option->id,
+                        'config_value_id' => $this->configOptions[$option->id],
+                    ]);
+                }
+            }
+            $price = $upgrade->calculatePrice();
+
+            if ($price->price <= 0) {
+                (new ServiceUpgradeService)->handle($upgrade);
+
+                if (!config('settings.credits_on_downgrade', true)) {
+                    DB::commit();
+                    $this->notify('The upgrade has been completed.', 'success', true);
+
+                    return $this->redirect(route('services.show', $service), true);
+                }
+
+                $user = User::where('id', Auth::id())->lockForUpdate()->first();
+                $credit = $user->credits()->where('currency_code', $price->currency->code)->first();
+
+                if ($credit) {
+                    $credit->increment('amount', abs($price->price));
+                } else {
+                    $user->credits()->create([
+                        'currency_code' => $price->currency->code,
+                        'amount' => abs($price->price),
+                    ]);
+                }
+
+                DB::commit();
+
+                if ($price->price < 0) {
+                    $this->notify('The upgrade has been completed. We\'ve added the remaining amount to your account balance.', 'success', true);
+                } else {
+                    $this->notify('The upgrade has been completed.', 'success', true);
+                }
+
+                return $this->redirect(route('services.show', $service), true);
             }
 
-            return $this->redirect(route('services.show', $this->service), true);
+            $invoice = new Invoice([
+                'currency_code' => $service->currency_code,
+                'status' => Invoice::STATUS_PENDING,
+                'due_at' => Carbon::now()->addDays(7),
+                'user_id' => $service->user_id,
+            ]);
+            $invoice->save();
+
+            $upgrade->invoice_id = $invoice->id;
+            $upgrade->save();
+
+            $invoice->items()->create([
+                'description' => 'Upgrade ' . $this->service->product->name . ' to ' . $this->upgradeProduct->name,
+                'price' => $price->price,
+                'quantity' => 1,
+                'reference_id' => $upgrade->id,
+                'reference_type' => ServiceUpgrade::class,
+            ]);
+
+            DB::commit();
+
+            $this->notify('The upgrade has been added to your cart. Please complete the payment to proceed.', 'success', true);
+
+            return $this->redirect(route('invoices.show', $invoice));
+
+        } catch (\Exception $e) {
+            // Rollback the transaction safely on failure
+            DB::rollBack();
+
+            if ($e instanceof DisplayException) {
+                return $this->notify($e->getMessage(), 'error');
+            } else {
+                report($e);
+                $this->notify('An error occurred while processing your order. Please try again later.');
+            }
         }
-
-        $invoice = new Invoice([
-            'currency_code' => $this->service->currency_code,
-            'status' => Invoice::STATUS_PENDING,
-            'due_at' => Carbon::now()->addDays(7),
-            'user_id' => $this->service->user_id,
-        ]);
-        $invoice->save();
-
-        $upgrade->invoice_id = $invoice->id;
-        $upgrade->save();
-
-        $invoice->items()->create([
-            'description' => 'Upgrade ' . $this->service->product->name . ' to ' . $this->upgradeProduct->name,
-            'price' => $price->price,
-            'quantity' => 1,
-            'reference_id' => $upgrade->id,
-            'reference_type' => ServiceUpgrade::class,
-        ]);
-
-        event(new InvoiceCreated($invoice));
-
-        $this->notify('The upgrade has been added to your cart. Please complete the payment to proceed.', 'success', true);
-
-        return $this->redirect(route('invoices.show', $invoice));
     }
 
     public function render()

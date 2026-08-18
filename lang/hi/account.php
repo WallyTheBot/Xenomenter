@@ -21,6 +21,7 @@ return [
     'sessions' => 'सेशंस',
     'sessions_description' => 'अन्य ब्राउज़र और डिवाइस पर अपनी सक्रिय सेशंस को प्रबंधित करें और लॉग आउट करें।',
     'logout_sessions' => 'इस सेशन को लॉग आउट करें',
+    'current_device' => 'Current device',
 
     'input' => [
         'current_password' => 'वर्तमान पासवर्ड',
@@ -71,6 +72,7 @@ return [
     'remove' => 'Remove',
     'remove_payment_method' => 'Remove Payment Method',
     'remove_payment_method_confirm' => 'Are you sure you want to remove :name? This action cannot be undone.',
+    'expires' => 'Expires :date',
     'cancel' => 'Cancel',
     'confirm' => 'Yes, Remove',
     'email_notifications' => 'Email Notifications',

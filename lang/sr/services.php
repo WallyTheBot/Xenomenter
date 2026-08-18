@@ -44,7 +44,7 @@ return [
         'active' => 'Aktivno',
         'cancelled' => 'Otkazano',
         'suspended' => 'Suspendovano',
-        'cancellation_pending' => 'Cancellation Pending',
+        'cancellation_pending' => 'Otkazivanje na čekanju',
     ],
     'billing_cycles' => [
         'day' => 'dan|dana',
@@ -55,15 +55,22 @@ return [
     'every_period' => 'Svakih :period :unit',
     'price_every_period' => ':price po :period :unit',
     'price_one_time' => ':price jednokratno',
-    'expires_at' => 'Ističe',
-    'auto_pay' => 'Auto paying using',
-    'auto_pay_not_configured' => 'Not configured',
+    'renews_in' => 'Obnavlja se za',
+    'renews_on' => 'Obnavlja se dana',
+    'auto_pay' => 'Automatsko plaćanje putem',
+    'auto_pay_not_configured' => 'Nije konfigurisano',
 
-    'no_services' => 'No services found',
-    'update_billing_agreement' => 'Update Billing Agreement',
-    'clear_billing_agreement' => 'Clear Billing Agreement',
-    'select_billing_agreement' => 'Select Billing Agreement',
+    'no_services' => 'Nije pronađena nijedna usluga',
+    'update_billing_agreement' => 'Ažuriraj ugovor o naplati',
+    'clear_billing_agreement' => 'Ukloni ugovor o naplati',
+    'select_billing_agreement' => 'Izaberi ugovor o naplati',
 
-    'remove_payment_method' => 'Remove Payment Method',
-    'remove_payment_method_confirm' => 'Are you sure you want to remove the payment method ":name" from this service? Your service will no longer be able to auto pay its invoices.',
+    'remove_payment_method' => 'Ukloni način plaćanja',
+    'remove_payment_method_confirm' => 'Da li ste sigurni da želite da uklonite način plaćanja ":name" sa ove usluge? Vaša usluga više neće moći da automatski plaća svoje račune.',
+
+    'label' => 'Oznaka',
+    'label_placeholder' => 'Unesite prilagođenu oznaku za ovu uslugu',
+    'label_modal_title' => 'Izmeni oznaku usluge',
+    'update_label' => 'Ažuriraj oznaku',
+
 ];
