@@ -131,6 +131,8 @@ class Stripe extends Gateway
         // If the extension isn't enabled, try to boot it
         if (!Route::has('extensions.gateways.stripe.webhook')) {
             require __DIR__ . '/routes.php';
+            // Routes added after boot aren't in the name index yet, which route() below relies on
+            Route::getRoutes()->refreshNameLookups();
         }
 
         // Check if webhook already exists
@@ -817,5 +819,28 @@ class Stripe extends Gateway
 
         // Compare the expected signature to the actual signature
         return hash_equals($expected_signature, $signature);
+    }
+
+    public function supportsRefunds(): bool
+    {
+        return true;
+    }
+
+    public function refund(InvoiceTransaction $transaction, $amount): bool
+    {
+        $paymentIntentId = $transaction->transaction_id;
+
+        if (!$paymentIntentId) {
+            throw new Exception('Transaction has no Stripe payment intent ID.');
+        }
+
+        $refundData = [
+            'payment_intent' => $paymentIntentId,
+            'amount' => (int) round($amount * 100),
+        ];
+
+        $this->request('post', '/refunds', $refundData);
+
+        return true;
     }
 }

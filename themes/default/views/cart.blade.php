@@ -21,7 +21,7 @@
                 <div class="flex flex-col justify-between items-end gap-4">
                     <h3 class="text-xl font-semibold p-1">
                         {{ $item->price->format($item->price->total * $item->quantity) }} @if ($item->quantity > 1)
-                        ({{ $item->price }} each)
+                        ({{ __('product.each', ['price' => $item->price]) }})
                         @endif
                     </h3>
                     <div class="flex flex-row gap-2">
@@ -40,12 +40,14 @@
                             </x-button.secondary>
                         </div>
                         @endif
+                        @if ($item->product->plans->count() > 1 || $item->product->configOptions->isNotEmpty() || !empty($item->checkout_config))
                         <a href="{{ route('products.checkout', [$item->product->category, $item->product, 'edit' => $item->id]) }}"
                             wire:navigate>
                             <x-button.primary class="h-fit w-fit">
                                 {{ __('product.edit') }}
                             </x-button.primary>
                         </a>
+                        @endif
                         <x-button.danger wire:click="removeProduct({{ $item->id }})" class="h-fit !w-fit">
                             <x-loading target="removeProduct({{ $item->id }})" />
                             <div wire:loading.remove wire:target="removeProduct({{ $item->id }})">
@@ -65,7 +67,7 @@
                 </h2>
                 <div class="font-semibold flex items-end gap-2">
                     @if(!$coupon)
-                    <x-form.input wire:model="coupon" name="coupon" label="Coupon" />
+                    <x-form.input wire:model="coupon" name="coupon" :label="__('product.coupon')" />
                     <x-button.primary wire:click="applyCoupon" class="h-fit !w-fit mb-0.5" wire:loading.attr="disabled">
                         <x-loading target="applyCoupon" />
                         <div wire:loading.remove wire:target="applyCoupon">

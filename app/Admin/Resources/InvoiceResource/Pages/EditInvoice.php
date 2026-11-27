@@ -14,16 +14,37 @@ class EditInvoice extends EditRecord
 {
     protected static string $resource = InvoiceResource::class;
 
+    protected function authorizeAccess(): void
+    {
+        if (config('settings.immutable_invoices_enabled', false) && $this->getRecord()->status !== Invoice::STATUS_DRAFT) {
+            $this->redirect(InvoiceResource::getUrl('view', ['record' => $this->getRecord()->getKey()]));
+
+            return;
+        }
+
+        parent::authorizeAccess();
+    }
+
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('publish')
+                ->label('Publish')
+                ->action(function (Invoice $record) {
+                    $this->changeInvoiceStatusToPending($record);
+                })
+                ->visible(fn (Invoice $record): bool => $record->status === Invoice::STATUS_DRAFT)
+                ->requiresConfirmation()
+                ->color('success')
+                ->icon('heroicon-o-check-circle')
+                ->successRedirectUrl(InvoiceResource::getUrl('index')),
             DeleteAction::make(),
             Action::make('pdf')
                 ->label('Download PDF')
                 ->action(function (Invoice $invoice) {
                     return response()->streamDownload(function () use ($invoice) {
-                        echo PDF::generateInvoice($invoice)->stream();
-                    }, 'invoice-' . ($invoice->number ?? $invoice->id) . '.pdf');
+                        echo PDF::generateInvoice($invoice)->output();
+                    }, $invoice->pdfDownloadFilename());
                 }),
             AuditAction::make()
                 ->auditChildren([
@@ -31,5 +52,11 @@ class EditInvoice extends EditRecord
                     'transactions',
                 ]),
         ];
+    }
+
+    protected function changeInvoiceStatusToPending(Invoice $invoice): void
+    {
+        $invoice->status = Invoice::STATUS_PENDING;
+        $invoice->save();
     }
 }

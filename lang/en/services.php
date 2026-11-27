@@ -20,6 +20,7 @@ return [
     'cancel_end_of_period' => 'Cancel at the end of the billing period',
     'cancel_immediate_warning' => 'When you press the button below, the service will be cancelled immediately and you will not be able to use it anymore.',
     'cancellation_requested' => 'Cancellation requested',
+    'not_cancellable' => 'This service cannot be cancelled',
 
     'current_plan' => 'Current Plan',
     'new_plan' => 'New Plan',
@@ -35,6 +36,12 @@ return [
     'next_step' => 'Next Step',
 
     'upgrade_pending' => 'You cannot upgrade whilst there is already an upgrade / downgrade invoice open',
+    'not_upgradable' => 'This service is not upgradable.',
+    'invalid_upgrade' => 'Invalid upgrade.',
+    'upgrade_no_changes' => 'You have not changed anything. Please select a different product or change the configuration options.',
+    'upgrade_completed' => 'The upgrade has been completed.',
+    'upgrade_completed_credited' => 'The upgrade has been completed. We\'ve added the remaining amount to your account balance.',
+    'upgrade_added_to_cart' => 'The upgrade has been added to your cart. Please complete the payment to proceed.',
 
     'outstanding_invoice' => 'You have an outstanding invoice.',
     'view_and_pay' => 'Click here to view and pay',
@@ -72,5 +79,8 @@ return [
     'label_placeholder' => 'Enter a custom label for this service',
     'label_modal_title' => 'Edit Service Label',
     'update_label' => 'Update Label',
+    'label_updated' => 'Service label updated successfully',
+    'view_not_found' => 'View not found',
+    'view_load_error' => 'Got an error while trying to load the view',
 
 ];
